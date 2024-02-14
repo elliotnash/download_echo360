@@ -2,6 +2,13 @@
 import logging
 import os
 import re
+
+import ffmpy
+import m3u8
+
+import requests
+from urllib.parse import urlparse
+
 from download_echo360.course import Echo360Course
 from download_echo360.downloader import Echo360Downloader
 
@@ -20,11 +27,9 @@ def start_download_binary(binary_downloader, binary_type):
 def run_setup_credentials(driver, url):
     driver.get(url)
     try:
-        print("> After you finish logging in, type 'continue' and press [Enter]")
+        print("> After you finish logging in, press [Enter]")
         print("-" * 80)
-        while True:
-            if input().lower() == "continue":
-                break
+        input()
     except KeyboardInterrupt:
         pass 
 
@@ -60,8 +65,66 @@ def main(course_url, output_dir="download", course_hostname="", webdriver_to_use
         '> Download will use {} webdriver'.format(webdriver_to_use)
     )
 
+    parsed = urlparse(course_url)
+    access_id = parsed.query.split("=")[1]
+    video_id = parsed.path.split("/")[-1]
+    print("access id: "+access_id)
+    print("video id: "+video_id)
+
     # wait for user to login
     run_setup_credentials(driver=downloader._driver, url=course_hostname)
-    
-    # download all videos
-    downloader.download_all()
+
+    session = requests.Session()
+    for cookie in downloader._driver.get_cookies():
+        session.cookies.set(cookie["name"], cookie["value"])
+
+    player_properties = session.get(f"https://echo360.ca/api/ui/echoplayer/secure-link-access-datas/{access_id}/media/{video_id}/player-properties").json()
+
+    audio_url = player_properties["data"]["playableAudioVideo"]["playableMedias"][0]["uri"]
+    video_url = player_properties["data"]["playableAudioVideo"]["playableMedias"][1]["uri"]
+    url_pattern = player_properties["data"]["sourceQueryStrings"]["queryStrings"][0]["uriPattern"]
+    query_string = player_properties["data"]["sourceQueryStrings"]["queryStrings"][0]["queryString"]
+    file_name = player_properties["data"]["mediaName"]
+
+    base_url = video_url.split("/1/")[0]+"/1/"
+
+    def download_source(url):
+        playlist = m3u8.loads(session.get(url).text)
+
+        print("\nPARSED PLAYLIST\n")
+
+        variant_url = f"{base_url}{playlist.playlists[1].uri}?{query_string}"
+        print(variant_url)
+        variant = m3u8.loads(session.get(variant_url).text)
+
+        segments = variant.data["segments"]
+        segments.insert(0, segments[0]["init_section"])
+
+        size = segments[-1]['byterange'].split("@")[1]
+        frag_bytes = bytes()
+        for segment in segments:
+            segment_url = f"{base_url}{segment['uri']}?{query_string}"
+            [length, start] = segment['byterange'].split("@")
+            end = int(start) + int(length) - 1
+            print(f"{round(float(start)/float(size)*100)}% downloaded ({start}/{size} bytes)")
+            frag_bytes += session.get(segment_url, headers={'Range': f"bytes={start}-{end}"}).content
+
+        return frag_bytes
+
+    print("Downloading audio")
+    with open("frag_audio.mp3", "wb") as out:
+        out.write(download_source(audio_url))
+
+    print("Downloading video")
+    with open("frag_video.mp4", "wb") as out:
+        out.write(download_source(video_url))
+
+    print("Merging sources")
+    ff = ffmpy.FFmpeg(
+        global_options="-loglevel panic",
+        inputs={"frag_video.mp4": None, "frag_audio.mp3": None},
+        outputs={file_name: ["-c", "copy"]},
+    )
+    ff.run()
+    os.remove("frag_video.mp4")
+    os.remove("frag_audio.mp3")

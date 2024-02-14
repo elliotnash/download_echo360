@@ -7,7 +7,7 @@ class ChromedriverDownloader(BinaryDownloader):
     def __init__(self):
         self._name = "chromedriver"
         self._download_link_root = "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/"
-        self._version = "119.0.6045.105"
+        self._version = "121.0.6167.85"
 
     def get_os_suffix(self):
         os_name = platform.system().lower()
