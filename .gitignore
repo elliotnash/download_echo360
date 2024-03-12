@@ -15,3 +15,5 @@ downloads/
 # app specific folders
 bin/
 download/
+
+credentials.toml

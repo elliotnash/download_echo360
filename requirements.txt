@@ -6,3 +6,4 @@ gevent
 wget
 tqdm
 m3u8
+mintotp
